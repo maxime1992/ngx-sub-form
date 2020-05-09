@@ -1,7 +1,14 @@
-import { AbstractControlOptions, ControlValueAccessor, FormGroup, Validator } from '@angular/forms';
+import {
+  AbstractControlOptions,
+  ControlValueAccessor,
+  FormArray,
+  FormControl,
+  FormGroup,
+  Validator,
+} from '@angular/forms';
 import { Observable, ReplaySubject } from 'rxjs';
-import { ControlsNames, FormErrors, OneOfControlsTypes, TypedFormGroup } from '../ngx-sub-form-utils';
-import { NgxSubFormRemapOptions } from './ngx-sub-form';
+import { ArrayPropertyKey, ControlsNames, FormErrors, OneOfControlsTypes, TypedFormGroup } from '../ngx-sub-form-utils';
+import { NgxSubFormRemapOptions, NgxSubFormWithArrayOptions } from './ngx-sub-form';
 
 export const deepCopy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 export type Nilable<T> = T | null | undefined;
@@ -101,6 +108,11 @@ export const getFormGroupErrors = <ControlInterface, FormInterface>(
   return Object.assign<any, any, any>({}, formGroup.errors ? { formGroup: formGroup.errors } : {}, formErrors);
 };
 
+export interface FormArrayWrapper<FormInterface> {
+  key: keyof FormInterface;
+  control: FormArray;
+}
+
 export function createFormDataFromOptions<ControlInterface, FormInterface>(
   options: NgxSubFormRemapOptions<ControlInterface, FormInterface>,
 ) {
@@ -117,5 +129,50 @@ export function createFormDataFromOptions<ControlInterface, FormInterface>(
     },
     {} as ControlsNames<FormInterface>,
   );
-  return { formGroup, defaultValues, formControlNames };
+
+  const formArrays: FormArrayWrapper<FormInterface>[] = formGroupKeys.reduce<FormArrayWrapper<FormInterface>[]>(
+    (acc, key) => {
+      const control = formGroup.get(key as string);
+      if (control instanceof FormArray) {
+        acc.push({ key, control });
+      }
+      return acc;
+    },
+    [],
+  );
+  return { formGroup, defaultValues, formControlNames, formArrays };
 }
+
+export const handleFArray = <FormInterface>(
+  formArrayWrappers: FormArrayWrapper<FormInterface>[],
+  obj: FormInterface,
+  createFormArrayControl: NgxSubFormWithArrayOptions<FormInterface>['createFormArrayControl'] | null,
+) => {
+  if (!formArrayWrappers.length) {
+    return;
+  }
+
+  formArrayWrappers.forEach(({ key, control }) => {
+    const value = obj[key];
+
+    if (!Array.isArray(value)) {
+      return;
+    }
+
+    // instead of creating a new array every time and push a new FormControl
+    // we just remove or add what is necessary so that:
+    // - it is as efficient as possible and do not create unnecessary FormControl every time
+    // - validators are not destroyed/created again and eventually fire again for no reason
+    while (control.length > value.length) {
+      control.removeAt(control.length - 1);
+    }
+
+    for (let i = control.length; i < value.length; i++) {
+      if (createFormArrayControl) {
+        control.insert(i, createFormArrayControl(key as ArrayPropertyKey<FormInterface>, value[i]));
+      } else {
+        control.insert(i, new FormControl(value[i]));
+      }
+    }
+  });
+};
